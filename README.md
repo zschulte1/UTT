@@ -2,7 +2,7 @@
 
 A market intelligence tool for the used tow-truck marketplace: trade-in appraisals grounded in real comps, a market dashboard, a searchable weekly inventory workbook, and an inventory map covering the US and Canada.
 
-Built from ~1,700 used tow truck listings pulled across 8+ marketplaces (including verified sold prices from Ritchie Bros auctions), enriched with NHTSA VIN-decode data and live open-recall checks.
+
 
 ## Running it
 
