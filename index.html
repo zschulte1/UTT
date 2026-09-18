@@ -274,6 +274,7 @@
   }
   .appraisal-grid input:focus, .appraisal-grid select:focus { outline: none; border-color: var(--focus-ring); }
   .appraisal-submit { border: none; }
+  .appraisal-form-actions { display: flex; align-items: center; gap: 10px; }
   .margin-input-row { display: flex; align-items: center; gap: 6px; }
   .margin-input-row input { width: 100%; }
   .margin-input-row span { color: var(--ink-muted); font-size: 0.9rem; }
@@ -541,7 +542,10 @@
             <div class="margin-input-row"><input id="apprMargin" type="number" min="0" max="90" placeholder="15" value="15"><span>%</span></div>
           </label>
         </div>
-        <button type="submit" class="ask-btn appraisal-submit">Appraise this truck</button>
+        <div class="appraisal-form-actions">
+          <button type="submit" class="ask-btn appraisal-submit">Appraise this truck</button>
+          <button type="button" id="appraisalClearBtn" class="mini-select">Clear filters</button>
+        </div>
         <div id="appraisalFormError" class="appraisal-form-error"></div>
       </form>
     </section>
@@ -874,6 +878,27 @@
     const milesRange = milesArr.length ? { min: Math.min(...milesArr), max: Math.max(...milesArr) } : null;
     const extrapolated = mileage != null && milesRange != null && (mileage < milesRange.min || mileage > milesRange.max);
 
+    // Softer version of the same problem: the input mileage can sit INSIDE
+    // the comp range and still be on a thin, unrepresentative tail of it --
+    // sold comps skew heavily toward high-mileage liquidation trucks (median
+    // 242k mi vs. 176k mi for asking, checked directly against the dataset),
+    // so a genuinely low-mileage truck routinely lands in the bottom of a
+    // pool mostly made of much rougher units. That pulls the median down for
+    // it specifically, and the capped linear mileage adjustment doesn't
+    // always fully correct for it. Surfaced as a direction (which way the
+    // estimate is probably wrong), not just "this number is unusual".
+    let mileageSkew = null;
+    if (!extrapolated && mileage != null && milesArr.length > 0) {
+      const atOrBelow = milesArr.filter(m => m <= mileage).length;
+      const atOrAbove = milesArr.filter(m => m >= mileage).length;
+      const total = milesArr.length;
+      if (atOrBelow / total <= 0.10) {
+        mileageSkew = { direction: 'conservative', count: atOrBelow, total };
+      } else if (atOrAbove / total <= 0.10) {
+        mileageSkew = { direction: 'generous', count: atOrAbove, total };
+      }
+    }
+
     // Same extrapolation check, but for model year -- the ±2yr window above
     // can come up empty (a make with no recent listings, or none old enough)
     // and silently fall back to every comp of that make regardless of age.
@@ -949,7 +974,7 @@
     return {
       count: comps.length, p25: adjP25, p50: adjP50, p75: adjP75, topComps,
       soldCount: soldComps.length, soldMedian, allComps: comps,
-      priceBasis: basis.basis, milesRange, extrapolated,
+      priceBasis: basis.basis, milesRange, extrapolated, mileageSkew,
       yearsRange, yearExtrapolated,
       askP25, askP50, askCount,
     };
@@ -1129,12 +1154,16 @@
       const yearWarnNote = result.yearExtrapolated
         ? `<div class="basis extrap-warn">No comps between ${result.yearsRange.min}&ndash;${result.yearsRange.max} for ${parsed.make} &mdash; this range is built from trucks far ${parsed.year > result.yearsRange.max ? 'older' : 'newer'} than ${parsed.year}. Treat with real caution.</div>`
         : '';
+      const skewWarnNote = result.mileageSkew
+        ? `<div class="basis extrap-warn">Only ${result.mileageSkew.count} of ${result.mileageSkew.total} ${result.priceBasis} comps have mileage this ${result.mileageSkew.direction === 'conservative' ? 'low' : 'high'} &mdash; treat this estimate as leaning ${result.mileageSkew.direction}.</div>`
+        : '';
       document.getElementById('answerBody').innerHTML = `
         <div class="headline">${fmt(result.p25)}&ndash;${fmt(result.p75)}<span class="range">estimated range</span></div>
         <div class="comps">${compRows}</div>
         <div class="basis">Based on ${result.count} comparable ${parsed.make} listings currently in the dataset. Median ${fmt(result.p50)}${parsed.mileage != null ? `, adjusted for ${Math.round(parsed.mileage).toLocaleString()} mi` : ''}.</div>
         ${soldNote}
         ${yearWarnNote}
+        ${skewWarnNote}
       `;
     }
     document.getElementById('askAnswer').hidden = false;
@@ -1408,6 +1437,18 @@
         marginPct: isNaN(marginInput) ? 15 : Math.max(0, Math.min(90, marginInput)),
       });
     });
+
+    document.getElementById('appraisalClearBtn').addEventListener('click', () => {
+      makeInput.value = '';
+      modelInput.value = '';
+      document.getElementById('apprYear').value = '';
+      document.getElementById('apprMileage').value = '';
+      document.getElementById('apprType').value = '';
+      document.getElementById('apprMargin').value = '15';
+      document.getElementById('appraisalFormError').textContent = '';
+      document.getElementById('appraisalResult').hidden = true;
+      makeInput.focus();
+    });
   }
 
   function runFullAppraisal(input) {
@@ -1459,12 +1500,20 @@
       const yearExtrapolatedNote = result.yearExtrapolated
         ? `<div class="basis extrap-warn">No comps between ${result.yearsRange.min}&ndash;${result.yearsRange.max} &mdash; this range is built entirely from trucks up to ${Math.max(Math.abs(input.year - result.yearsRange.min), Math.abs(input.year - result.yearsRange.max))} years ${input.year > result.yearsRange.max ? 'older' : 'newer'} than the ${input.year} you asked about. Treat this number with real caution.</div>`
         : '';
+      // Softer sibling of the extrapolation warnings above: the input
+      // mileage is technically within the comp range, but on a thin,
+      // unrepresentative tail of it -- says which direction the estimate
+      // is probably wrong instead of just flagging it as unusual.
+      const skewNote = result.mileageSkew
+        ? `<div class="basis extrap-warn">Only ${result.mileageSkew.count} of ${result.mileageSkew.total} ${result.priceBasis} comps have mileage this ${result.mileageSkew.direction === 'conservative' ? 'low' : 'high'} &mdash; most of what this range is built on runs ${result.mileageSkew.direction === 'conservative' ? 'higher' : 'lower'}-mileage than your truck, so treat this estimate as leaning ${result.mileageSkew.direction}.</div>`
+        : '';
       document.getElementById('appraisalHeadline').innerHTML = `
         <div class="headline">${fmt(result.p25)}&ndash;${fmt(result.p75)}<span class="range">estimated range &middot; median ${fmt(result.p50)}</span></div>
         <div class="basis">${yearBasisText}</div>
         ${soldNote}
         ${extrapolatedNote}
         ${yearExtrapolatedNote}
+        ${skewNote}
       `;
 
       const marginPct = input.marginPct != null ? input.marginPct : 15;
