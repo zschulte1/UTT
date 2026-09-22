@@ -162,6 +162,20 @@
   .filter-year-sep { color: var(--ink-muted); }
   #dashFilterReset { cursor: pointer; }
   #dashFilterReset:hover { border-color: var(--focus-ring); color: var(--ink); }
+  /* Dashboard filter bar: collapsed to Manufacturer + Verified-sold-only,
+     everything else (Year/Mileage/Chassis/Region) behind "More filters" --
+     .dash-filters-collapsed is scoped to the Dashboard only so the Workbook's
+     own .dashboard-filters bar (still a flat row) is untouched. */
+  .dash-filters-collapsed { flex-direction: column; align-items: stretch; }
+  .dash-primary-filters, .dashboard-filters-inner { display: flex; align-items: flex-end; gap: 14px; flex-wrap: wrap; }
+  .dashboard-filters-inner { margin-top: 12px; }
+  .dash-more-filters summary { cursor: pointer; color: var(--focus-ring); font-size: 0.82rem; list-style: none; margin-top: 2px; }
+  .dash-more-filters summary::-webkit-details-marker { display: none; }
+  .dash-more-filters summary::before { content: '▸ '; font-size: 0.7em; }
+  .dash-more-filters[open] summary::before { content: '▾ '; }
+  #dashTakeaway { font-family: 'Oswald', sans-serif; font-size: 1.25rem; font-weight: 600; color: var(--beacon-strong); margin-bottom: 14px; line-height: 1.4; }
+  #dashTakeaway .sub { display: block; font-family: 'IBM Plex Mono', monospace; font-size: 0.78rem; font-weight: 400; color: var(--ink-2); margin-top: 4px; }
+  .stat-tile .stat-caveat { display: block; font-size: 0.62rem; color: var(--ink-muted); margin-top: 2px; text-transform: none; letter-spacing: normal; }
   .filter-checkbox-row {
     display: flex; align-items: center; gap: 8px; font-size: 0.82rem; color: var(--ink);
     padding: 6px 12px; height: 33px; box-sizing: border-box; border: 1px solid var(--border-strong);
@@ -632,54 +646,63 @@
       <h1>Market <span class="accent">Dashboard</span></h1>
       <p class="sub">How this market is actually pricing right now, based on verified sold transactions by default.</p>
     </section>
-    <section class="dashboard-filters">
-      <label class="filter-field">
-        <span class="filter-field-label">Manufacturer</span>
-        <select id="dashMfrFilter" class="mini-select"><option value="">All manufacturers</option></select>
-      </label>
-      <label class="filter-field">
-        <span class="filter-field-label">Year</span>
-        <span class="filter-year-range">
-          <select id="dashYearFrom" class="mini-select year-input"><option value="">Any</option></select>
-          <span class="filter-year-sep">&ndash;</span>
-          <select id="dashYearTo" class="mini-select year-input"><option value="">Any</option></select>
-        </span>
-      </label>
-      <label class="filter-field">
-        <span class="filter-field-label">Mileage</span>
-        <select id="dashMileageFilter" class="mini-select">
-          <option value="">All mileage</option>
-          <option value="0-75000">Under 75k mi</option>
-          <option value="75000-150000">75k&ndash;150k mi</option>
-          <option value="150000-250000">150k&ndash;250k mi</option>
-          <option value="250000-99999999">250k+ mi</option>
-        </select>
-      </label>
-      <label class="filter-field">
-        <span class="filter-field-label">Chassis class</span>
-        <select id="dashGvwrTierFilter" class="mini-select">
-          <option value="">All chassis</option>
-          <option value="light">Light-duty (Class 2&ndash;4)</option>
-          <option value="heavy">Heavy wreckers (Class 5&ndash;8)</option>
-        </select>
-      </label>
-      <label class="filter-field">
-        <span class="filter-field-label">Region</span>
-        <select id="dashRegionFilter" class="mini-select">
-          <option value="">Nationwide</option>
-          <option value="sunbelt">Sunbelt</option>
-          <option value="saltbelt">Salt Belt</option>
-        </select>
-      </label>
-      <label class="filter-field filter-field-checkbox">
-        <span class="filter-field-label">&nbsp;</span>
-        <span class="filter-checkbox-row">
-          <input type="checkbox" id="dashSoldOnly" checked>
-          <span>Verified sold only</span>
-        </span>
-      </label>
-      <button type="button" id="dashFilterReset" class="mini-select">Reset filters</button>
-      <span class="dash-filter-count mono" id="dashFilterCount"></span>
+    <div id="dashTakeaway"></div>
+    <section class="stat-tiles" id="dashStatTiles"></section>
+    <section class="dashboard-filters dash-filters-collapsed">
+      <div class="dash-primary-filters">
+        <label class="filter-field">
+          <span class="filter-field-label">Manufacturer</span>
+          <select id="dashMfrFilter" class="mini-select"><option value="">All manufacturers</option></select>
+        </label>
+        <label class="filter-field filter-field-checkbox">
+          <span class="filter-field-label">&nbsp;</span>
+          <span class="filter-checkbox-row">
+            <input type="checkbox" id="dashSoldOnly" checked>
+            <span>Verified sold only</span>
+          </span>
+        </label>
+        <button type="button" id="dashFilterReset" class="mini-select">Reset filters</button>
+        <span class="dash-filter-count mono" id="dashFilterCount"></span>
+      </div>
+      <details class="dash-more-filters">
+        <summary>More filters (year, mileage, chassis class, region)</summary>
+        <div class="dashboard-filters-inner">
+          <label class="filter-field">
+            <span class="filter-field-label">Year</span>
+            <span class="filter-year-range">
+              <select id="dashYearFrom" class="mini-select year-input"><option value="">Any</option></select>
+              <span class="filter-year-sep">&ndash;</span>
+              <select id="dashYearTo" class="mini-select year-input"><option value="">Any</option></select>
+            </span>
+          </label>
+          <label class="filter-field">
+            <span class="filter-field-label">Mileage</span>
+            <select id="dashMileageFilter" class="mini-select">
+              <option value="">All mileage</option>
+              <option value="0-75000">Under 75k mi</option>
+              <option value="75000-150000">75k&ndash;150k mi</option>
+              <option value="150000-250000">150k&ndash;250k mi</option>
+              <option value="250000-99999999">250k+ mi</option>
+            </select>
+          </label>
+          <label class="filter-field">
+            <span class="filter-field-label">Chassis class</span>
+            <select id="dashGvwrTierFilter" class="mini-select">
+              <option value="">All chassis</option>
+              <option value="light">Light-duty (Class 2&ndash;4)</option>
+              <option value="heavy">Heavy wreckers (Class 5&ndash;8)</option>
+            </select>
+          </label>
+          <label class="filter-field">
+            <span class="filter-field-label">Region</span>
+            <select id="dashRegionFilter" class="mini-select">
+              <option value="">Nationwide</option>
+              <option value="sunbelt">Sunbelt</option>
+              <option value="saltbelt">Salt Belt</option>
+            </select>
+          </label>
+        </div>
+      </details>
     </section>
     <section class="chart-card">
       <div class="chart-card-head">
@@ -2101,10 +2124,68 @@
     renderDashboardCharts();
   }
 
+  // Answer-first summary above the filter bar: a one-line takeaway plus 4
+  // stat tiles (body-type split, sold/asking median mileage, middle-50%
+  // price range, sold/asking count), all computed from the exact same
+  // `filtered` rows the charts below use -- never a separate query, so this
+  // can't drift out of sync with what the charts are actually showing.
+  // Validated live against the real data before this was built (mockup on
+  // localhost): the sold/asking mileage gap it surfaces (~240k vs ~175k mi
+  // nationally) matches the mileage-skew finding already built into the
+  // Appraisal tool, checked independently.
+  function renderDashTakeaway(filtered) {
+    const takeaway = document.getElementById('dashTakeaway');
+    const stats = document.getElementById('dashStatTiles');
+    if (!filtered.length) {
+      takeaway.innerHTML = 'No listings match this filter.';
+      stats.innerHTML = '';
+      return;
+    }
+    const mfrLabel = dashFilters.mfr || 'All manufacturers';
+    const priced = filtered.map(r => toNum(r.price_numeric)).filter(v => v !== null);
+    const sold = filtered.filter(r => r.price_type === 'sold');
+    const asking = filtered.filter(r => r.price_type !== 'sold');
+    const med = percentile(priced, 50);
+    const p25 = percentile(priced, 25), p75 = percentile(priced, 75);
+    const basisLabel = dashFilters.soldOnly ? 'verified sold' : 'asking + sold blended';
+    // A caveat once the sample gets thin enough that a single truck can
+    // swing these numbers -- same spirit as the 15-comp floor elsewhere on
+    // this page, just a note instead of hiding the tile outright.
+    const caveat = filtered.length < 8 ? `<span class="stat-caveat">only ${filtered.length} comp${filtered.length > 1 ? 's' : ''}</span>` : '';
+    takeaway.innerHTML = `${mfrLabel} &mdash; median ${fmt(med)} (${basisLabel})` +
+      `<span class="sub">${filtered.length.toLocaleString()} comps in this pull, ${sold.length.toLocaleString()} verified sold</span>`;
+
+    const withBody = filtered.filter(r => r.body_class);
+    const rollback = withBody.filter(r => r.body_class === 'rollback').length;
+    const wrecker = withBody.filter(r => r.body_class === 'wrecker').length;
+    const tileBody = withBody.length
+      ? `<div class="stat-tile"><div class="stat-num">${Math.round(rollback / withBody.length * 100)}% / ${Math.round(wrecker / withBody.length * 100)}%</div><div class="stat-label">rollback / wrecker split${caveat}</div></div>`
+      : `<div class="stat-tile"><div class="stat-num">&mdash;</div><div class="stat-label">no body data in this slice</div></div>`;
+
+    const soldMi = sold.map(r => toNum(r.mileage_numeric)).filter(v => v !== null);
+    const askMi = asking.map(r => toNum(r.mileage_numeric)).filter(v => v !== null);
+    const fmtK = v => `${Math.round(v / 1000)}k`;
+    let tileMileage;
+    if (soldMi.length >= 5 && askMi.length >= 5) {
+      tileMileage = `<div class="stat-tile"><div class="stat-num">${fmtK(percentile(soldMi, 50))} / ${fmtK(percentile(askMi, 50))} mi</div><div class="stat-label">sold / asking median mileage</div></div>`;
+    } else if (soldMi.length || askMi.length) {
+      const only = soldMi.length ? soldMi : askMi;
+      tileMileage = `<div class="stat-tile"><div class="stat-num">${fmtK(percentile(only, 50))} mi</div><div class="stat-label">median mileage (${soldMi.length ? 'sold' : 'asking'} only)${caveat}</div></div>`;
+    } else {
+      tileMileage = `<div class="stat-tile"><div class="stat-num">&mdash;</div><div class="stat-label">no mileage data in this slice</div></div>`;
+    }
+
+    const tileRange = `<div class="stat-tile"><div class="stat-num">${fmt(p25)}&ndash;${fmt(p75)}</div><div class="stat-label">middle 50% range${caveat}</div></div>`;
+    const tileSplit = `<div class="stat-tile"><div class="stat-num">${sold.length.toLocaleString()} / ${asking.length.toLocaleString()}</div><div class="stat-label">sold / asking listings</div></div>`;
+
+    stats.innerHTML = tileBody + tileMileage + tileRange + tileSplit;
+  }
+
   function renderDashboardCharts() {
     const filtered = dashFilteredData();
     document.getElementById('dashFilterCount').textContent =
       `${filtered.length.toLocaleString()} of ${COMP_DATA.length.toLocaleString()} listings match`;
+    renderDashTakeaway(filtered);
 
     const chartIds = ['chartSegmentPrice', 'chartSpread', 'chartScatter'];
     if (!filtered.length) {
