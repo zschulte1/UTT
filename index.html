@@ -241,6 +241,8 @@
   svg.plot .grid-line { stroke: var(--border); stroke-width: 1; }
   svg.plot .dot { fill: var(--beacon); opacity: 0.82; cursor: pointer; }
   svg.plot .dot:hover { fill: var(--beacon-strong); opacity: 1; }
+  svg.plot .dot.dot-asking { fill: var(--focus-ring); opacity: 0.55; }
+  svg.plot .dot.dot-asking:hover { fill: var(--focus-ring); opacity: 0.9; }
   svg.plot .trend-line { stroke: var(--focus-ring); stroke-width: 2; fill: none; opacity: 0.85; }
 
   /* ---- Stat tiles (Weekly Workbook summary) ---- */
@@ -2222,22 +2224,26 @@
       elBrand.innerHTML = '<p class="chart-note">Not enough body-brand data identified in this slice (need 10+ comps per brand).</p>';
     }
 
-    // Chart 3: price vs mileage scatter, manufacturer-selectable. Asking
-    // prices sit well above the real sold cluster (same bias as the bar
-    // charts above), which would drag the trend line up -- plot verified
-    // sold only when there's enough of it, falling back to every listing
-    // (flagged) only for a manufacturer too thin on sold comps to trust.
+    // Chart 3: price vs mileage scatter, manufacturer-selectable. Follows
+    // the "Verified sold only" checkbox directly rather than silently
+    // overriding it -- checked, `by[mfr]` is already sold-only (dashFiltered
+    // Data already excluded asking rows); unchecked, plot every listing and
+    // color-code sold vs. asking so the wider spread from asking prices
+    // (which typically run above real sale prices) is visible, not hidden.
     const scatterBasisNoteEl = document.getElementById('scatterBasisNote');
     const renderScatterForMfr = (mfr) => {
-      const { basis, soldCount } = pricesByBasis(by[mfr], 8);
-      if (basis === 'sold') {
-        scatterBasisNoteEl.textContent = dashFilters.soldOnly
-          ? `Verified sold only (${soldCount} sales)`
-          : `Verified sold only (${soldCount} sales) — asking listings run well above real sale prices and would skew the trend line`;
+      const rows = by[mfr];
+      if (dashFilters.soldOnly) {
+        scatterBasisNoteEl.textContent = `Verified sold only (${rows.length.toLocaleString()} sales)`;
       } else {
-        scatterBasisNoteEl.textContent = `Too few verified sales for ${mfr} yet — showing all ${by[mfr].length} listings (asking + sold) instead`;
+        const soldCount = rows.filter(r => r.price_type === 'sold').length;
+        const askingCount = rows.length - soldCount;
+        scatterBasisNoteEl.innerHTML = `All ${rows.length.toLocaleString()} listings &middot; ` +
+          `<span style="color:var(--beacon-strong)">${soldCount.toLocaleString()} verified sold</span> + ` +
+          `<span style="color:var(--focus-ring)">${askingCount.toLocaleString()} asking</span> ` +
+          `&mdash; asking prices typically run above real sale prices`;
       }
-      renderScatter(basis === 'sold' ? by[mfr].filter(r => r.price_type === 'sold') : by[mfr]);
+      renderScatter(rows);
     };
     const scatterMfrs = Object.entries(by).filter(([, rows]) => rows.length >= 15).sort((a, b) => b[1].length - a[1].length).map(([m]) => m);
     const sel = document.getElementById('scatterMfrSelect');
@@ -2295,7 +2301,8 @@
     svg += `<line class="axis-line" x1="${M.l}" x2="${W - M.r}" y1="${H - M.b}" y2="${H - M.b}"/>`;
     svg += `<line class="trend-line" x1="${sx(0)}" y1="${sy(Math.max(0, intercept))}" x2="${sx(xMax)}" y2="${sy(Math.max(0, intercept + slope * xMax))}"/>`;
     pts.forEach((p, i) => {
-      const dot = `<circle class="dot" data-i="${i}" cx="${sx(p.x)}" cy="${sy(p.y)}" r="4"/>`;
+      const dotClass = p.r.price_type === 'sold' ? 'dot' : 'dot dot-asking';
+      const dot = `<circle class="${dotClass}" data-i="${i}" cx="${sx(p.x)}" cy="${sy(p.y)}" r="4"/>`;
       // A real <a> so the browser handles navigation natively -- a script-
       // triggered window.open() can get silently swallowed by the Artifact
       // viewer's sandboxed iframe even though it opens fine in an
