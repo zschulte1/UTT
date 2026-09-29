@@ -1463,10 +1463,109 @@
     if (badge) { badge.className = 'abadge warn'; badge.innerHTML = `<span class="dot"></span>${data.Count} open recall${data.Count > 1 ? 's' : ''}`; }
   }
 
+  // Dataset-overview meta question ("how many listings do you have") --
+  // answered from the same live counts the home-page stat line uses, never
+  // a separate hardcoded number.
+  function renderDatasetOverview(queryText) {
+    document.getElementById('recallSection').innerHTML = '';
+    document.getElementById('answerQ').textContent = `"${queryText}"`;
+    const sold = COMP_DATA.filter(r => r.price_type === 'sold').length;
+    const asking = COMP_DATA.length - sold;
+    const topSources = Object.entries(domainCounts).sort((a, b) => b[1] - a[1]).slice(0, 3)
+      .map(([d, n]) => `${SOURCE_DOMAIN_NAMES[d] || d} (${n.toLocaleString()})`).join(', ');
+    document.getElementById('answerBody').innerHTML = `
+      <div class="headline">${COMP_DATA.length.toLocaleString()}<span class="range">tracked listings</span></div>
+      <div class="basis">${sold.toLocaleString()} verified sold, ${asking.toLocaleString()} dealer asking &mdash; pulled from ${Object.keys(domainCounts).length} marketplaces.</div>
+      <div class="basis">Largest sources: ${topSources}.</div>
+    `;
+    document.getElementById('askAnswer').hidden = false;
+  }
+
+  // "Most popular/common manufacturer" -- chassis volume is the one figure
+  // with complete coverage across every tracked listing (same reasoning as
+  // the Market Dashboard's "leading chassis" tile), so it's the trustworthy
+  // answer to a bare "what's most popular" question.
+  function renderTopManufacturers(queryText) {
+    document.getElementById('recallSection').innerHTML = '';
+    document.getElementById('answerQ').textContent = `"${queryText}"`;
+    const by = groupByManufacturer(COMP_DATA);
+    const summary = Object.entries(by)
+      .map(([mfr, rows]) => ({ mfr, count: rows.length, share: rows.length / COMP_DATA.length * 100 }))
+      .sort((a, b) => b.count - a.count)
+      .slice(0, 5);
+    if (!summary.length) {
+      document.getElementById('answerBody').innerHTML = `<div class="basis">Not enough manufacturer data to answer that yet.</div>`;
+    } else {
+      const rows = summary.map(s => `<div class="comp-row"><span class="who">${s.mfr}</span><span class="price mono">${s.share.toFixed(0)}% &middot; ${s.count.toLocaleString()}</span></div>`).join('');
+      document.getElementById('answerBody').innerHTML = `
+        <div class="headline">${summary[0].mfr}<span class="range">most listed &middot; ${summary[0].share.toFixed(0)}% share</span></div>
+        <div class="comps">${rows}</div>
+        <div class="basis">Share of chassis manufacturer across all ${COMP_DATA.length.toLocaleString()} tracked listings.</div>
+      `;
+    }
+    document.getElementById('askAnswer').hidden = false;
+  }
+
+  // "Most common body brand" -- one level down from chassis, to the actual
+  // wrecker/rollback body builder. Coverage here is real but partial
+  // (~43-46% of listings identify a brand), so that's stated up front
+  // rather than implied by a clean-looking number.
+  function renderTopBodyBrands(queryText) {
+    document.getElementById('recallSection').innerHTML = '';
+    document.getElementById('answerQ').textContent = `"${queryText}"`;
+    const byBrand = {};
+    COMP_DATA.forEach(r => {
+      const brand = (r.body_brand || '').trim();
+      if (!brand) return;
+      (byBrand[brand] = byBrand[brand] || []).push(r);
+    });
+    const totalIdentified = Object.values(byBrand).reduce((s, rows) => s + rows.length, 0);
+    const summary = Object.entries(byBrand)
+      .map(([brand, rows]) => ({ brand, count: rows.length, share: totalIdentified ? rows.length / totalIdentified * 100 : 0 }))
+      .filter(b => b.count >= 5)
+      .sort((a, b) => b.count - a.count)
+      .slice(0, 5);
+    if (!summary.length) {
+      document.getElementById('answerBody').innerHTML = `<div class="basis">Not enough body-brand data identified yet to answer that.</div>`;
+    } else {
+      const rows = summary.map(s => `<div class="comp-row"><span class="who">${s.brand}</span><span class="price mono">${s.share.toFixed(0)}% &middot; ${s.count.toLocaleString()}</span></div>`).join('');
+      document.getElementById('answerBody').innerHTML = `
+        <div class="headline">${summary[0].brand}<span class="range">most common body brand &middot; ${summary[0].share.toFixed(0)}% share</span></div>
+        <div class="comps">${rows}</div>
+        <div class="basis">Share of the ${totalIdentified.toLocaleString()} listings with a known body brand (${Math.round(totalIdentified / COMP_DATA.length * 100)}% of all tracked listings identify one).</div>
+      `;
+    }
+    document.getElementById('askAnswer').hidden = false;
+  }
+
+  // A manufacturer named with no year -- answers with that make's overall
+  // range instead of the old flat "couldn't understand that" failure,
+  // which is exactly what used to happen for a query like "Peterbilt prices".
+  function renderMakeOverview(queryText, parsed) {
+    document.getElementById('recallSection').innerHTML = '';
+    document.getElementById('answerQ').textContent = `"${queryText}"`;
+    const rows = COMP_DATA.filter(r => r.manufacturer === parsed.make);
+    if (!rows.length) {
+      document.getElementById('answerBody').innerHTML = `<div class="basis">No ${parsed.make} listings in the current dataset.</div>`;
+      document.getElementById('askAnswer').hidden = false;
+      return;
+    }
+    const { prices, basis, soldCount } = pricesByBasis(rows);
+    const p25 = percentile(prices, 25), p75 = percentile(prices, 75), p50 = percentile(prices, 50);
+    const years = rows.map(r => toNum(r.year)).filter(v => v !== null);
+    const yearRange = years.length ? `${Math.min(...years)}&ndash;${Math.max(...years)}` : null;
+    document.getElementById('answerBody').innerHTML = `
+      <div class="headline">${fmt(p25)}&ndash;${fmt(p75)}<span class="range">${parsed.make} typical range</span></div>
+      <div class="basis">Based on ${rows.length.toLocaleString()} ${parsed.make} listings${yearRange ? `, model years ${yearRange}` : ''}. Median ${fmt(p50)} (${basis}${soldCount ? `, ${soldCount.toLocaleString()} verified sold` : ''}).</div>
+      <div class="basis">Add a model year (&ldquo;2020 ${parsed.make}&hellip;&rdquo;) for a specific comp-based estimate instead of the full range.</div>
+    `;
+    document.getElementById('askAnswer').hidden = false;
+  }
+
   function handleQuery(text) {
+    const t = text.toUpperCase();
     const isRegional = /WHERE|HIGHEST|LOWEST|CHEAPEST|CHEAP|PRICIEST|MOST EXPENSIVE|REGION/i.test(text) && !/\b(19|20)\d{2}\b/.test(text);
     if (isRegional) {
-      const t = text.toUpperCase();
       const truckType = /ROLLBACK/.test(t) ? 'ROLLBACK' : (/WRECKER/.test(t) ? 'WRECKER' : null);
       const sortDir = /CHEAP|LOWEST|LEAST/.test(t) ? 'asc' : 'desc';
       const state = detectState(text);
@@ -1477,10 +1576,26 @@
       }
       return;
     }
+    if (/HOW MANY|HOW BIG|DATASET SIZE|TOTAL (LISTINGS|TRUCKS|COMPS)/.test(t)) {
+      renderDatasetOverview(text);
+      return;
+    }
+    if (/BODY BRAND/.test(t)) {
+      renderTopBodyBrands(text);
+      return;
+    }
+    if (/MOST (POPULAR|COMMON|LISTED)|TOP (MANUFACTURER|BRAND|MAKE|SELLER)|LEADING (MANUFACTURER|BRAND|MAKE)/.test(t) && !MAKES.some(m => t.includes(m))) {
+      renderTopManufacturers(text);
+      return;
+    }
     const parsed = parseQuery(text);
+    if (parsed.make && !parsed.year) {
+      renderMakeOverview(text, parsed);
+      return;
+    }
     if (!parsed.year || !parsed.make) {
       document.getElementById('answerQ').textContent = `"${text}"`;
-      document.getElementById('answerBody').innerHTML = `<div class="basis">Couldn't pick out a year and manufacturer from that &mdash; try something like "2020 Freightliner M2 106, 150k miles."</div>`;
+      document.getElementById('answerBody').innerHTML = `<div class="basis">Couldn't pick out enough to answer that. Try a specific truck (&ldquo;2020 Freightliner M2 106, 150k miles&rdquo;), a manufacturer on its own (&ldquo;Peterbilt prices&rdquo;), a market question (&ldquo;most popular manufacturer&rdquo;, &ldquo;how many listings do you have&rdquo;), or a regional one (&ldquo;where are rollback prices highest&rdquo;).</div>`;
       document.getElementById('recallSection').innerHTML = '';
       document.getElementById('askAnswer').hidden = false;
       return;
