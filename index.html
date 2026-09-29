@@ -144,6 +144,12 @@
   .legend-row { display: flex; gap: 16px; margin: 6px 0 10px; flex-wrap: wrap; }
   .legend-item { display: flex; align-items: center; gap: 6px; font-size: 0.76rem; color: var(--ink-2); }
   .legend-swatch { width: 10px; height: 10px; border-radius: 2px; display: inline-block; }
+  .yr-legend-item { cursor: pointer; user-select: none; border-radius: 6px; padding: 3px 7px; margin: -3px -7px; transition: background 0.15s, opacity 0.15s; }
+  .yr-legend-item:hover, .yr-legend-item:focus-visible { background: var(--surface-hover); }
+  .yr-legend-item.yr-inactive { opacity: 0.4; text-decoration: line-through; }
+  svg.yr-trend-plot .yr-line, svg.yr-trend-plot .yr-dot { transition: opacity 0.15s; }
+  svg.yr-trend-plot .yr-dot { cursor: pointer; }
+  svg.yr-trend-plot .yr-dot:hover { r: 7; }
 
   .mini-select, .mini-input {
     font: inherit; font-size: 0.82rem; color: var(--ink); background: var(--bg-2);
@@ -2360,7 +2366,12 @@
       el.innerHTML = `<p class="chart-note">Not enough verified-sold comps per model year in this slice (need ${DASH_YEAR_MIN_COMPS}+ sales for at least 2 years).</p>`;
       return;
     }
-    noteEl.textContent = `Verified sold only, always -- a model-year point needs ${DASH_YEAR_MIN_COMPS}+ sales for that year`;
+    // The legend count is NOT the manufacturer's full sold-comp count
+    // elsewhere on this page -- it's only the sold comps that fall in a
+    // model year with 5+ sales. A manufacturer with lots of thin single-
+    // digit years (common for older trucks) will show fewer here than its
+    // real total, because those years don't get a trustworthy point.
+    noteEl.textContent = `Verified sold only, always — a point needs ${DASH_YEAR_MIN_COMPS}+ sales for that model year, so thin years are folded out and the legend count runs lower than each manufacturer's full sold total — click a legend name to isolate it, click a point to appraise that year`;
 
     const lines = series.map((s, i) => ({
       mfr: s.mfr,
@@ -2372,13 +2383,13 @@
     const minYear = allYears[0], maxYear = allYears[allYears.length - 1];
     const allPrices = lines.flatMap(l => l.pts.map(p => p.y));
 
-    const W = 720, H = 320, M = { l: 60, r: 16, t: 14, b: 34 };
+    const W = 720, H = 340, M = { l: 64, r: 16, t: 14, b: 34 };
     const yMax = Math.max(...allPrices) * 1.08;
     const sx = x => minYear === maxYear ? (W - M.l - M.r) / 2 + M.l : M.l + ((x - minYear) / (maxYear - minYear)) * (W - M.l - M.r);
     const sy = y => H - M.b - (y / yMax) * (H - M.t - M.b);
 
     const yTicks = [0, 0.25, 0.5, 0.75, 1].map(f => Math.round(yMax * f));
-    let svg = `<svg class="plot" viewBox="0 0 ${W} ${H}">`;
+    let svg = `<svg class="plot yr-trend-plot" viewBox="0 0 ${W} ${H}">`;
     yTicks.forEach(t => {
       svg += `<line class="grid-line" x1="${M.l}" x2="${W - M.r}" y1="${sy(t)}" y2="${sy(t)}"/>`;
       svg += `<text class="axis-label" x="${M.l - 8}" y="${sy(t) + 3}" text-anchor="end">${fmt(t)}</text>`;
@@ -2386,14 +2397,16 @@
     const yearStep = allYears.length > 12 ? Math.ceil(allYears.length / 8) : 1;
     allYears.forEach((y, i) => {
       if (i % yearStep !== 0 && i !== allYears.length - 1) return;
+      svg += `<line class="grid-line" x1="${sx(y)}" x2="${sx(y)}" y1="${M.t}" y2="${H - M.b}" opacity="0.4"/>`;
       svg += `<text class="axis-label" x="${sx(y)}" y="${H - M.b + 16}" text-anchor="middle">${y}</text>`;
     });
     svg += `<line class="axis-line" x1="${M.l}" x2="${W - M.r}" y1="${H - M.b}" y2="${H - M.b}"/>`;
     lines.forEach(l => {
       const pathD = l.pts.map((p, idx) => `${idx === 0 ? 'M' : 'L'} ${sx(p.x)} ${sy(p.y)}`).join(' ');
-      svg += `<path d="${pathD}" fill="none" stroke="${l.color}" stroke-width="2" opacity="0.9"/>`;
+      svg += `<path class="yr-line" data-mfr="${l.mfr}" d="${pathD}" fill="none" stroke="${l.color}" stroke-width="2.5"/>`;
       l.pts.forEach(p => {
-        svg += `<circle data-tt="${l.mfr} &middot; ${p.x} &middot; ${fmt(p.y)} &middot; ${p.n} sold" cx="${sx(p.x)}" cy="${sy(p.y)}" r="4" fill="${l.color}" style="cursor:pointer"/>`;
+        svg += `<circle class="yr-dot" data-mfr="${l.mfr}" data-tt="${l.mfr} &middot; ${p.x} &middot; ${fmt(p.y)} &middot; ${p.n} sold &middot; click to appraise" ` +
+          `data-year="${p.x}" cx="${sx(p.x)}" cy="${sy(p.y)}" r="5" fill="${l.color}"/>`;
       });
     });
     svg += `</svg>`;
@@ -2401,8 +2414,52 @@
     wireBarTooltips(el);
 
     legendEl.innerHTML = lines.map(l =>
-      `<span class="legend-item"><span class="legend-swatch" style="background:${l.color}"></span>${l.mfr} (${l.totalQualifying})</span>`
+      `<span class="legend-item yr-legend-item" data-mfr="${l.mfr}" role="button" tabindex="0">` +
+      `<span class="legend-swatch" style="background:${l.color}"></span>${l.mfr} (${l.totalQualifying})</span>`
     ).join('');
+    wireYearTrendInteractivity(el, legendEl);
+  }
+
+  // Hover a legend name (or the line itself) to isolate it -- dims every
+  // other manufacturer's line/dots instead of leaving all 6 competing for
+  // attention at once. Click a legend name to hide/show that line outright
+  // (state lives only on these DOM nodes, so it resets on the next
+  // re-render/filter change rather than surviving as separate app state).
+  // Click a point to jump straight to an Appraisal for that manufacturer/year.
+  function wireYearTrendInteractivity(svgContainer, legendContainer) {
+    const hidden = new Set();
+    const paths = () => svgContainer.querySelectorAll('.yr-line');
+    const dots = () => svgContainer.querySelectorAll('.yr-dot');
+    const legendItems = () => legendContainer.querySelectorAll('.yr-legend-item');
+
+    const applyHidden = () => {
+      paths().forEach(p => { p.style.display = hidden.has(p.dataset.mfr) ? 'none' : ''; });
+      dots().forEach(d => { d.style.display = hidden.has(d.dataset.mfr) ? 'none' : ''; });
+      legendItems().forEach(li => li.classList.toggle('yr-inactive', hidden.has(li.dataset.mfr)));
+    };
+    const highlight = (mfr) => {
+      paths().forEach(p => { p.style.opacity = (!mfr || p.dataset.mfr === mfr) ? '1' : '0.15'; });
+      dots().forEach(d => { d.style.opacity = (!mfr || d.dataset.mfr === mfr) ? '1' : '0.15'; });
+    };
+
+    legendItems().forEach(li => {
+      li.addEventListener('mouseenter', () => highlight(li.dataset.mfr));
+      li.addEventListener('mouseleave', () => highlight(null));
+      li.addEventListener('click', () => {
+        hidden.has(li.dataset.mfr) ? hidden.delete(li.dataset.mfr) : hidden.add(li.dataset.mfr);
+        applyHidden();
+      });
+      li.addEventListener('keydown', (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); li.click(); } });
+    });
+    paths().forEach(p => {
+      p.addEventListener('mouseenter', () => highlight(p.dataset.mfr));
+      p.addEventListener('mouseleave', () => highlight(null));
+    });
+    dots().forEach(d => {
+      d.addEventListener('mouseenter', () => highlight(d.dataset.mfr));
+      d.addEventListener('mouseleave', () => highlight(null));
+      d.addEventListener('click', () => jumpToAppraisal({ mfr: d.dataset.mfr, year: Number(d.dataset.year) }));
+    });
   }
 
   function renderScatter(rows, containerId, highlight) {
