@@ -631,6 +631,7 @@
           <div class="chart-card-head" style="margin-top:18px;">
             <h3>Mileage curve</h3>
           </div>
+          <div class="legend-row" id="appraisalScatterLegend"></div>
           <div id="appraisalScatter"></div>
           <div class="chart-card-head" style="margin-top:18px;">
             <h3>Comparable listings</h3>
@@ -718,6 +719,14 @@
         <span class="chart-note" id="bodyBrandNote">Share of tracked listings that carry each body brand &middot; every row needs 10+ comps to appear here</span>
       </div>
       <div id="chartBodyBrand"></div>
+    </section>
+    <section class="chart-card">
+      <div class="chart-card-head">
+        <h3>Price by model year</h3>
+        <span class="chart-note" id="yearTrendNote"></span>
+      </div>
+      <div class="legend-row" id="yearTrendLegend"></div>
+      <div id="chartYearTrend" style="margin-top:8px;"></div>
     </section>
     <details class="dash-collapsible">
       <summary>View underlying data &middot; price vs. mileage scatter</summary>
@@ -1693,6 +1702,7 @@
       document.getElementById('appraisalGauge').innerHTML = '';
       document.getElementById('appraisalComps').innerHTML = '';
       document.getElementById('appraisalScatter').innerHTML = '';
+      document.getElementById('appraisalScatterLegend').innerHTML = '';
     } else {
       document.getElementById('appraisalWhyWrap').hidden = false;
       document.getElementById('appraisalDetailsWrap').hidden = false;
@@ -1904,6 +1914,12 @@
       });
       const highlight = input.mileage != null ? { x: input.mileage, y: result.p50 } : null;
       renderScatter(mfrRows, 'appraisalScatter', highlight);
+      const soldCount = mfrRows.filter(r => r.price_type === 'sold').length;
+      const askingCount = mfrRows.length - soldCount;
+      document.getElementById('appraisalScatterLegend').innerHTML =
+        `<span class="legend-item"><span class="legend-swatch" style="background:var(--beacon)"></span>${soldCount.toLocaleString()} verified sold</span>` +
+        `<span class="legend-item"><span class="legend-swatch" style="background:var(--focus-ring)"></span>${askingCount.toLocaleString()} asking</span>` +
+        (highlight ? `<span class="legend-item"><span class="legend-swatch" style="background:var(--ink); border:1px solid var(--bg)"></span>Your truck</span>` : '');
     }
 
     renderRecallCheck(input.year, input.make, input.model, 'appraisalRecall', 'appraisalRecallBadge');
@@ -1995,6 +2011,14 @@
   // useful market-share data point even if its median price isn't trustworthy
   // yet (handled separately, per row, below).
   const DASH_BRAND_MIN_COMPS = 10;
+  // Per (manufacturer, model year) cell for the price-by-model-year trend --
+  // much smaller than DASH_MIN_COMPS since slicing by individual year
+  // thins the sample a lot faster than slicing by manufacturer alone.
+  const DASH_YEAR_MIN_COMPS = 5;
+  // Distinct per-manufacturer line colors -- picked from the existing
+  // palette (amber/blue already mean sold/asking elsewhere on this chart,
+  // so this trend uses its own set to avoid implying that meaning here).
+  const YEAR_TREND_COLORS = ['#7F77DD', '#1D9E75', '#D85A30', '#D4537E', '#378ADD', '#BA7517'];
 
   function dashFilteredData(opts = {}) {
     return COMP_DATA.filter(r => {
@@ -2158,11 +2182,13 @@
     document.getElementById('dashFilterCount').textContent =
       `${filtered.length.toLocaleString()} of ${COMP_DATA.length.toLocaleString()} listings match`;
 
-    const chartIds = ['chartChassisShare', 'chartBodyBrand', 'chartScatter'];
+    const chartIds = ['chartChassisShare', 'chartBodyBrand', 'chartYearTrend', 'chartScatter'];
     if (!filtered.length) {
       renderDashTakeaway(filtered, {});
       chartIds.forEach(id => { document.getElementById(id).innerHTML = '<p class="chart-note">No listings match these filters.</p>'; });
       document.getElementById('chassisShareNote').textContent = '';
+      document.getElementById('yearTrendNote').textContent = '';
+      document.getElementById('yearTrendLegend').innerHTML = '';
       document.getElementById('scatterBasisNote').textContent = '';
       document.getElementById('scatterLegend').innerHTML = '';
       document.getElementById('scatterMfrSelect').innerHTML = '';
@@ -2240,6 +2266,38 @@
       elBrand.innerHTML = '<p class="chart-note">Not enough body-brand data identified in this slice (need 10+ comps per brand).</p>';
     }
 
+    // Price by model year -- a depreciation curve per manufacturer, not a
+    // calendar-time trend: the dataset has no sale/listing date, only the
+    // truck's model year. Always uses verified-sold prices regardless of
+    // the "Verified sold only" checkbox, same reasoning as the "Median
+    // sold price" tile above -- blending in asking prices here would stack
+    // a second bias on top of the one this chart already has to manage
+    // (thin per-year samples), making the curve less trustworthy, not more.
+    const soldByMfrYear = {};
+    filtered.forEach(r => {
+      if (r.price_type !== 'sold') return;
+      const mfr = (r.manufacturer || '').trim();
+      const yr = toNum(r.year);
+      const p = toNum(r.price_numeric);
+      if (!mfr || yr === null || p === null) return;
+      (soldByMfrYear[mfr] = soldByMfrYear[mfr] || {});
+      (soldByMfrYear[mfr][yr] = soldByMfrYear[mfr][yr] || []).push(p);
+    });
+    const mfrYearCandidates = Object.entries(soldByMfrYear)
+      .map(([mfr, byYear]) => {
+        const qualifyingYears = Object.entries(byYear).filter(([, prices]) => prices.length >= DASH_YEAR_MIN_COMPS);
+        const totalQualifying = qualifyingYears.reduce((s, [, prices]) => s + prices.length, 0);
+        return { mfr, qualifyingYears, totalQualifying };
+      })
+      .filter(m => m.qualifyingYears.length >= 2)
+      .sort((a, b) => b.totalQualifying - a.totalQualifying);
+    // A manufacturer filter shows just that line; otherwise cap to the top
+    // few by volume -- more than ~6 lines on one chart stops being readable.
+    const mfrYearPlotted = dashFilters.mfr
+      ? mfrYearCandidates.filter(m => m.mfr === dashFilters.mfr)
+      : mfrYearCandidates.slice(0, 6);
+    renderYearTrend(mfrYearPlotted);
+
     // Chart 3: price vs mileage scatter, manufacturer-selectable. Follows
     // the "Verified sold only" checkbox directly rather than silently
     // overriding it -- checked, `by[mfr]` is already sold-only (dashFiltered
@@ -2287,6 +2345,64 @@
       el.addEventListener('mousemove', (e) => ttShow(e.clientX, e.clientY, `<div class="tt-row">${el.getAttribute('data-tt')}</div>`));
       el.addEventListener('mouseleave', ttHide);
     });
+  }
+
+  // One line per manufacturer, x = model year, y = median verified-sold
+  // price for that year. `series` is [{mfr, qualifyingYears, totalQualifying}],
+  // qualifyingYears already floored at DASH_YEAR_MIN_COMPS per cell.
+  function renderYearTrend(series) {
+    const el = document.getElementById('chartYearTrend');
+    const noteEl = document.getElementById('yearTrendNote');
+    const legendEl = document.getElementById('yearTrendLegend');
+    if (!series.length) {
+      noteEl.textContent = '';
+      legendEl.innerHTML = '';
+      el.innerHTML = `<p class="chart-note">Not enough verified-sold comps per model year in this slice (need ${DASH_YEAR_MIN_COMPS}+ sales for at least 2 years).</p>`;
+      return;
+    }
+    noteEl.textContent = `Verified sold only, always -- a model-year point needs ${DASH_YEAR_MIN_COMPS}+ sales for that year`;
+
+    const lines = series.map((s, i) => ({
+      mfr: s.mfr,
+      color: YEAR_TREND_COLORS[i % YEAR_TREND_COLORS.length],
+      totalQualifying: s.totalQualifying,
+      pts: s.qualifyingYears.map(([y, prices]) => ({ x: Number(y), y: percentile(prices, 50), n: prices.length })).sort((a, b) => a.x - b.x),
+    }));
+    const allYears = [...new Set(lines.flatMap(l => l.pts.map(p => p.x)))].sort((a, b) => a - b);
+    const minYear = allYears[0], maxYear = allYears[allYears.length - 1];
+    const allPrices = lines.flatMap(l => l.pts.map(p => p.y));
+
+    const W = 720, H = 320, M = { l: 60, r: 16, t: 14, b: 34 };
+    const yMax = Math.max(...allPrices) * 1.08;
+    const sx = x => minYear === maxYear ? (W - M.l - M.r) / 2 + M.l : M.l + ((x - minYear) / (maxYear - minYear)) * (W - M.l - M.r);
+    const sy = y => H - M.b - (y / yMax) * (H - M.t - M.b);
+
+    const yTicks = [0, 0.25, 0.5, 0.75, 1].map(f => Math.round(yMax * f));
+    let svg = `<svg class="plot" viewBox="0 0 ${W} ${H}">`;
+    yTicks.forEach(t => {
+      svg += `<line class="grid-line" x1="${M.l}" x2="${W - M.r}" y1="${sy(t)}" y2="${sy(t)}"/>`;
+      svg += `<text class="axis-label" x="${M.l - 8}" y="${sy(t) + 3}" text-anchor="end">${fmt(t)}</text>`;
+    });
+    const yearStep = allYears.length > 12 ? Math.ceil(allYears.length / 8) : 1;
+    allYears.forEach((y, i) => {
+      if (i % yearStep !== 0 && i !== allYears.length - 1) return;
+      svg += `<text class="axis-label" x="${sx(y)}" y="${H - M.b + 16}" text-anchor="middle">${y}</text>`;
+    });
+    svg += `<line class="axis-line" x1="${M.l}" x2="${W - M.r}" y1="${H - M.b}" y2="${H - M.b}"/>`;
+    lines.forEach(l => {
+      const pathD = l.pts.map((p, idx) => `${idx === 0 ? 'M' : 'L'} ${sx(p.x)} ${sy(p.y)}`).join(' ');
+      svg += `<path d="${pathD}" fill="none" stroke="${l.color}" stroke-width="2" opacity="0.9"/>`;
+      l.pts.forEach(p => {
+        svg += `<circle data-tt="${l.mfr} &middot; ${p.x} &middot; ${fmt(p.y)} &middot; ${p.n} sold" cx="${sx(p.x)}" cy="${sy(p.y)}" r="4" fill="${l.color}" style="cursor:pointer"/>`;
+      });
+    });
+    svg += `</svg>`;
+    el.innerHTML = svg;
+    wireBarTooltips(el);
+
+    legendEl.innerHTML = lines.map(l =>
+      `<span class="legend-item"><span class="legend-swatch" style="background:${l.color}"></span>${l.mfr} (${l.totalQualifying})</span>`
+    ).join('');
   }
 
   function renderScatter(rows, containerId, highlight) {
