@@ -3169,12 +3169,25 @@
     return missing > 0 ? ` &middot; ${missing.toLocaleString()} of ${total.toLocaleString()} ${mapPriceMode === 'sold' ? 'verified sold' : 'asking'} not shown (no location on the listing)` : '';
   }
 
+  // Sold and asking are different populations: auction winning bids on a
+  // generally older, higher-mileage mix vs. dealer retail asks. State the
+  // median price and median model year of the active mode so the color
+  // difference between the two views isn't read as a like-for-like price gap.
+  function mapModeContext() {
+    const rows = COMP_DATA.filter(r => (mapPriceMode === 'sold') === (r.price_type === 'sold'));
+    const prices = rows.map(r => toNum(r.price_numeric)).filter(v => v !== null);
+    const years = rows.map(r => toNum(r.year)).filter(v => v !== null);
+    if (!prices.length) return '';
+    const what = mapPriceMode === 'sold' ? 'auction winning bids' : 'dealer asking prices';
+    return `<span class="legend-item">${what} &middot; median ${fmt(percentile(prices, 50))}${years.length ? `, median model year ${Math.round(percentile(years, 50))}` : ''} &middot; sold and asking are not like-for-like</span>`;
+  }
+
   function mapGLLegend() {
     if (!mapGLPins) return;
     const sw = MAP_PRICE_BANDS.map(b => `<span class="legend-item"><span class="legend-swatch" style="background:${b.color}"></span>${b.label}</span>`).join('');
     document.getElementById('mapLegend').innerHTML = `
       <div class="legend-row">${sw}</div>
-      <div class="legend-row"><span class="legend-item">Circle size and number = trucks in that city &middot; color = median price &middot; zoom in for individual trucks, click one to open the listing</span><span class="legend-item">${mapGLPins.length} trucks${mapUnplottedNote()}</span></div>`;
+      <div class="legend-row"><span class="legend-item">Circle size and number = trucks in that city &middot; color = median price &middot; zoom in for individual trucks, click one to open the listing</span><span class="legend-item">${mapGLPins.length} trucks${mapUnplottedNote()}</span>${mapModeContext()}</div>`;
   }
 
   function mapRenderGL() {
@@ -3465,7 +3478,7 @@
           <span class="legend-end">${maxStateCount}+ trucks</span>
         </div>
         <div class="legend-row">
-          <span class="legend-item">State/province shading = listing count &middot; circles = trucks in that city (number shown), colored by median price &middot; ${pins.length} trucks total${mapUnplottedNote()} &middot; click one to zoom in</span>
+          <span class="legend-item">State/province shading = listing count &middot; circles = trucks in that city (number shown), colored by median price &middot; ${pins.length} trucks total${mapUnplottedNote()} &middot; click one to zoom in</span>${mapModeContext()}
         </div>`;
     } else {
       const exactCount = pins.filter(x => x.exact).length;
@@ -3476,7 +3489,7 @@
         <div class="legend-row">${bandSwatches}</div>
         <div class="legend-row">
           <span class="legend-item">1 dot = 1 truck, colored by price &middot; tight clusters = saturated markets</span>
-          <span class="legend-item">${exactCount} of ${pins.length} at exact city &middot; rest by state centroid${mapUnplottedNote()}</span>
+          <span class="legend-item">${exactCount} of ${pins.length} at exact city &middot; rest by state centroid${mapUnplottedNote()}</span>${mapModeContext()}
         </div>`;
     }
   }
