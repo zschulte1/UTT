@@ -149,7 +149,10 @@
   .yr-legend-item.yr-inactive { opacity: 0.4; text-decoration: line-through; }
   svg.yr-trend-plot .yr-line, svg.yr-trend-plot .yr-dot { transition: opacity 0.15s; }
   svg.yr-trend-plot .yr-dot { cursor: pointer; }
-  svg.yr-trend-plot .yr-dot:hover { r: 7; }
+  svg.yr-trend-plot .yr-dot { stroke: var(--surface); stroke-width: 1.5px; }
+  svg.yr-trend-plot .yr-dot.yr-thin { fill: var(--surface); stroke: currentColor; stroke-width: 2.25px; }
+  svg.yr-trend-plot .yr-dot.yr-off { stroke-dasharray: 2.5 2.5; }
+  svg.yr-trend-plot .yr-dot:hover, svg.yr-trend-plot .yr-dot.yr-thin:hover { stroke: var(--ink); stroke-width: 2.5px; }
 
   .mini-select, .mini-input {
     font: inherit; font-size: 0.82rem; color: var(--ink); background: var(--bg-2);
@@ -2149,6 +2152,11 @@
   // much smaller than DASH_MIN_COMPS since slicing by individual year
   // thins the sample a lot faster than slicing by manufacturer alone.
   const DASH_YEAR_MIN_COMPS = 5;
+  // Price by model year covers the last ~20 model years, and also plots years
+  // with only 3-4 sales as hollow "thin" dots so the lines aren't broken by every
+  // year that missed the 5-sale floor.
+  const YEAR_TREND_START = 2006;
+  const DASH_YEAR_THIN_COMPS = 3;
   // Distinct per-manufacturer line colors -- picked from the existing
   // palette (amber/blue already mean sold/asking elsewhere on this chart,
   // so this trend uses its own set to avoid implying that meaning here).
@@ -2449,7 +2457,7 @@
     });
     const mfrYearCandidates = Object.entries(soldByMfrYear)
       .map(([mfr, byYear]) => {
-        const qualifyingYears = Object.entries(byYear).filter(([, prices]) => prices.length >= DASH_YEAR_MIN_COMPS);
+        const qualifyingYears = Object.entries(byYear).filter(([yr, prices]) => Number(yr) >= YEAR_TREND_START && prices.length >= DASH_YEAR_THIN_COMPS);
         const totalQualifying = qualifyingYears.reduce((s, [, prices]) => s + prices.length, 0);
         return { mfr, qualifyingYears, totalQualifying };
       })
@@ -2512,8 +2520,14 @@
   }
 
   // One line per manufacturer, x = model year, y = median verified-sold
-  // price for that year. `series` is [{mfr, qualifyingYears, totalQualifying}],
-  // qualifyingYears already floored at DASH_YEAR_MIN_COMPS per cell.
+  // price for that year. `series` is [{mfr, qualifyingYears, totalQualifying}].
+  // The x-axis is a fixed YEAR_TREND_START -> current-year scale with every
+  // model year labeled (it used to be stretched to whatever years happened to
+  // have data and force-print the last year, which crammed "2023 2024"
+  // together). Manufacturers are nudged sideways within each year so their dots
+  // don't stack, dot size shows how many sales sit behind a point, years with
+  // only DASH_YEAR_THIN_COMPS-(MIN-1) sales are hollow, and a line crossing a
+  // year with no point is dashed rather than implying data that isn't there.
   function renderYearTrend(series) {
     const el = document.getElementById('chartYearTrend');
     const noteEl = document.getElementById('yearTrendNote');
@@ -2521,15 +2535,12 @@
     if (!series.length) {
       noteEl.textContent = '';
       legendEl.innerHTML = '';
-      el.innerHTML = `<p class="chart-note">Not enough verified-sold comps per model year in this slice (need ${DASH_YEAR_MIN_COMPS}+ sales for at least 2 years).</p>`;
+      el.innerHTML = `<p class="chart-note">Not enough verified-sold comps per model year in this slice (need ${DASH_YEAR_THIN_COMPS}+ sales in at least 2 model years since ${YEAR_TREND_START}).</p>`;
       return;
     }
-    // The legend count is NOT the manufacturer's full sold-comp count
-    // elsewhere on this page -- it's only the sold comps that fall in a
-    // model year with 5+ sales. A manufacturer with lots of thin single-
-    // digit years (common for older trucks) will show fewer here than its
-    // real total, because those years don't get a trustworthy point.
-    noteEl.textContent = `Verified sold only, always — a point needs ${DASH_YEAR_MIN_COMPS}+ sales for that model year, so thin years are folded out and the legend count runs lower than each manufacturer's full sold total — click a legend name to isolate it, click a point to appraise that year`;
+    // The legend count is only the sold comps sitting in a plotted model year,
+    // so it runs lower than the manufacturer's full sold total elsewhere.
+    noteEl.textContent = `Model years ${YEAR_TREND_START} to present · verified sold only, always · solid dot = ${DASH_YEAR_MIN_COMPS}+ sales, hollow dot = ${DASH_YEAR_THIN_COMPS}\u2013${DASH_YEAR_MIN_COMPS - 1} sales (thin sample) · dot size = number of sales · dashed = a model year with too few sales · click a legend name to isolate it, click a dot to appraise that year`;
 
     const lines = series.map((s, i) => ({
       mfr: s.mfr,
@@ -2537,34 +2548,63 @@
       totalQualifying: s.totalQualifying,
       pts: s.qualifyingYears.map(([y, prices]) => ({ x: Number(y), y: percentile(prices, 50), n: prices.length })).sort((a, b) => a.x - b.x),
     }));
-    const allYears = [...new Set(lines.flatMap(l => l.pts.map(p => p.x)))].sort((a, b) => a - b);
-    const minYear = allYears[0], maxYear = allYears[allYears.length - 1];
-    const allPrices = lines.flatMap(l => l.pts.map(p => p.y));
+    const minYear = YEAR_TREND_START;
+    const maxYear = Math.max(new Date().getFullYear(), ...lines.flatMap(l => l.pts.map(p => p.x)));
+    // Scale the price axis from the solid points (5+ sales). A thin 3-4 sale
+    // median can be wildly high or low, and letting it set the scale squashes
+    // every other line into the bottom of the chart. A thin point well above the
+    // scale is parked on the top edge as a dashed ring (real value in its
+    // tooltip) and isn't joined to its neighbours.
+    const allPts = lines.flatMap(l => l.pts);
+    const solidMax = Math.max(0, ...allPts.filter(p => p.n >= DASH_YEAR_MIN_COMPS).map(p => p.y)) || Math.max(...allPts.map(p => p.y));
+    const scalePrices = allPts.map(p => p.y).filter(y => y <= solidMax * 1.25);
 
-    const W = 720, H = 340, M = { l: 64, r: 16, t: 14, b: 34 };
-    const yMax = Math.max(...allPrices) * 1.08;
-    const sx = x => minYear === maxYear ? (W - M.l - M.r) / 2 + M.l : M.l + ((x - minYear) / (maxYear - minYear)) * (W - M.l - M.r);
+    const W = 720, H = 440, M = { l: 66, r: 18, t: 16, b: 52 };
+    const innerW = W - M.l - M.r;
+    const slot = innerW / (maxYear - minYear);
+    // Round y-axis steps ($20,000, $40,000 ...) instead of fractions of the max.
+    const rawMax = Math.max(...scalePrices) * 1.05;
+    const step = [5000, 10000, 20000, 25000, 50000, 100000, 250000].find(s => rawMax / s <= 6) || 250000;
+    const yMax = Math.ceil(rawMax / step) * step;
+    const sx = x => M.l + (x - minYear) * slot;
     const sy = y => H - M.b - (y / yMax) * (H - M.t - M.b);
+    allPts.forEach(p => { p.off = p.y > yMax; p.py = p.off ? yMax : p.y; });
+    if (allPts.some(p => p.off)) noteEl.textContent += ' · dashed ring on the top edge = above this price scale (real value in the tooltip)';
+    const dodge = Math.min(4, slot / (lines.length + 1));
+    const nudge = i => (i - (lines.length - 1) / 2) * dodge;
 
-    const yTicks = [0, 0.25, 0.5, 0.75, 1].map(f => Math.round(yMax * f));
     let svg = `<svg class="plot yr-trend-plot" viewBox="0 0 ${W} ${H}">`;
-    yTicks.forEach(t => {
+    for (let t = 0; t <= yMax; t += step) {
       svg += `<line class="grid-line" x1="${M.l}" x2="${W - M.r}" y1="${sy(t)}" y2="${sy(t)}"/>`;
       svg += `<text class="axis-label" x="${M.l - 8}" y="${sy(t) + 3}" text-anchor="end">${fmt(t)}</text>`;
-    });
-    const yearStep = allYears.length > 12 ? Math.ceil(allYears.length / 8) : 1;
-    allYears.forEach((y, i) => {
-      if (i % yearStep !== 0 && i !== allYears.length - 1) return;
-      svg += `<line class="grid-line" x1="${sx(y)}" x2="${sx(y)}" y1="${M.t}" y2="${H - M.b}" opacity="0.4"/>`;
-      svg += `<text class="axis-label" x="${sx(y)}" y="${H - M.b + 16}" text-anchor="middle">${y}</text>`;
-    });
+    }
+    // Label every model year when the chart is wide enough for four-digit
+    // labels, otherwise every 2nd (or 4th); every year still gets a gridline.
+    const slotPx = (el.clientWidth || W) * slot / W;
+    const labelEvery = slotPx >= 28 ? 1 : slotPx >= 14 ? 2 : 4;
+    for (let y = minYear; y <= maxYear; y++) {
+      const labeled = (y - minYear) % labelEvery === 0;
+      svg += `<line class="grid-line" x1="${sx(y)}" x2="${sx(y)}" y1="${M.t}" y2="${H - M.b}" opacity="${labeled ? 0.35 : 0.15}"/>`;
+      if (labeled) svg += `<text class="axis-label" x="${sx(y)}" y="${H - M.b + 16}" text-anchor="middle">${y}</text>`;
+    }
     svg += `<line class="axis-line" x1="${M.l}" x2="${W - M.r}" y1="${H - M.b}" y2="${H - M.b}"/>`;
-    lines.forEach(l => {
-      const pathD = l.pts.map((p, idx) => `${idx === 0 ? 'M' : 'L'} ${sx(p.x)} ${sy(p.y)}`).join(' ');
-      svg += `<path class="yr-line" data-mfr="${l.mfr}" d="${pathD}" fill="none" stroke="${l.color}" stroke-width="2.5"/>`;
+    svg += `<text class="axis-label" x="${M.l + innerW / 2}" y="${H - 10}" text-anchor="middle">Model year</text>`;
+
+    lines.forEach((l, i) => {
+      const dx = nudge(i);
+      // Solid segment between consecutive model years, dashed across a missing year.
+      for (let k = 1; k < l.pts.length; k++) {
+        const a = l.pts[k - 1], b = l.pts[k], gap = b.x - a.x > 1;
+        if (a.off || b.off) continue;
+        svg += `<path class="yr-line" data-mfr="${l.mfr}" d="M ${sx(a.x) + dx} ${sy(a.py)} L ${sx(b.x) + dx} ${sy(b.py)}" fill="none" stroke="${l.color}" stroke-width="2.25"` +
+          (gap ? ' stroke-dasharray="5 5" stroke-opacity="0.6"' : '') + `/>`;
+      }
       l.pts.forEach(p => {
-        svg += `<circle class="yr-dot" data-mfr="${l.mfr}" data-tt="${l.mfr} &middot; ${p.x} &middot; ${fmt(p.y)} &middot; ${p.n} sold &middot; click to appraise" ` +
-          `data-year="${p.x}" cx="${sx(p.x)}" cy="${sy(p.y)}" r="5" fill="${l.color}"/>`;
+        const thin = p.n < DASH_YEAR_MIN_COMPS;
+        const r = Math.min(9, 3 + Math.sqrt(p.n) * 1.2).toFixed(1);
+        svg += `<circle class="yr-dot${thin ? ' yr-thin' : ''}${p.off ? ' yr-off' : ''}" data-mfr="${l.mfr}" data-year="${p.x}" ` +
+          `data-tt="${l.mfr} &middot; model year ${p.x} &middot; median ${fmt(p.y)}${p.off ? ' (above the chart scale)' : ''} &middot; ${p.n} sold${thin ? ' (thin sample)' : ''} &middot; click to appraise" ` +
+          `cx="${sx(p.x) + dx}" cy="${sy(p.py)}" r="${r}" fill="${l.color}" style="color:${l.color}"/>`;
       });
     });
     svg += `</svg>`;
@@ -2702,39 +2742,103 @@
 
   function toCsvField(v) {
     const s = (v == null) ? '' : String(v);
-    return /[",\n]/.test(s) ? '"' + s.replace(/"/g, '""') + '"' : s;
+    return /[",\r\n]/.test(s) ? '"' + s.replace(/"/g, '""') + '"' : s;
+  }
+
+  // A normal browser download (Blob + <a download>), so the button works on the
+  // published site. The host `downloads` capability exists only inside Claude's
+  // Artifact viewer, which is why this used to say "Export isn't available".
+  function triggerBrowserDownload(filename, text) {
+    const blob = new Blob([text], { type: 'text/csv;charset=utf-8' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url; a.download = filename; a.style.display = 'none';
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 4000);
+  }
+
+  // [data key, column heading]. Exports exactly the rows the table is showing.
+  const WORKBOOK_EXPORT_COLS = [
+    ['year', 'Year'], ['manufacturer', 'Manufacturer'], ['model', 'Model'], ['truck_type', 'Truck type'],
+    ['mileage_numeric', 'Mileage'], ['price_numeric', 'Price'], ['price_type', 'Price type'], ['sold_date', 'Sold date'],
+    ['condition', 'Condition'], ['city', 'City'], ['state', 'State'], ['source_site', 'Source'], ['vin', 'VIN'],
+    ['gvwr_class', 'GVWR class'], ['fuel_type', 'Fuel'], ['body_class', 'Body'], ['body_brand', 'Body brand'],
+    ['body_material', 'Body material'], ['bed_length_ft', 'Bed length (ft)'], ['winch_lb', 'Winch (lb)'], ['boom_lb', 'Boom (lb)'],
+    ['body_tons', 'Body tons'], ['engine_hours', 'Engine hours'], ['wheelbase_in', 'Wheelbase (in)'],
+    ['wheel_lift', 'Wheel lift'], ['tow_dollies', 'Tow dollies'], ['pto', 'PTO'], ['url', 'Listing URL'],
+  ];
+  const WORKBOOK_ROUND_COLS = new Set(['mileage_numeric', 'price_numeric', 'winch_lb', 'boom_lb', 'engine_hours', 'wheelbase_in']);
+  const WORKBOOK_FLAG_COLS = new Set(['wheel_lift', 'tow_dollies', 'pto']);
+
+  function workbookExportValue(r, key) {
+    const v = r[key];
+    if (key === 'year') return String(v || '').replace(/\.0$/, '');
+    if (key === 'source_site') return sourceNameOf(r);
+    if (key === 'price_type') return r.price_type === 'sold' ? 'Verified sold' : 'Asking';
+    if (key === 'body_class') return capWord(v || '');
+    // The dataset stores these as the text "True"/"False", not a boolean.
+    if (WORKBOOK_FLAG_COLS.has(key)) return ['true', 'yes', '1'].includes(String(v).toLowerCase()) ? 'Yes' : '';
+    if (WORKBOOK_ROUND_COLS.has(key)) { const n = toNum(v); return n === null ? '' : Math.round(n); }
+    return v;
   }
 
   async function exportWorkbookCsv() {
     const statusEl = document.getElementById('workbookExportStatus');
-    const cols = ['year', 'manufacturer', 'model', 'truck_type', 'mileage_numeric', 'price_numeric', 'price_type', 'condition', 'city', 'state', 'source_site', 'vin', 'gvwr_class', 'fuel_type', 'body_class', 'body_brand', 'body_material', 'bed_length_ft', 'winch_lb', 'boom_lb', 'body_tons', 'engine_hours', 'wheelbase_in', 'wheel_lift', 'tow_dollies', 'pto', 'url'];
-    const header = cols.join(',');
-    const lines = workbookCurrentRows.map(r => cols.map(c => toCsvField(c === 'year' ? String(r[c] || '').replace(/\.0$/, '') : c === 'source_site' ? sourceNameOf(r) : (c === 'wheel_lift' || c === 'tow_dollies' || c === 'pto') ? (r[c] === true ? 'Yes' : '') : r[c])).join(','));
-    const csv = [header, ...lines].join('\n');
-
-    const dl = await getDownloadsCap();
-    if (!dl) { statusEl.textContent = 'Export isn\'t available in this view.'; return; }
+    const rows = workbookCurrentRows;
+    if (!rows.length) { statusEl.textContent = 'Nothing to export — no listings match the current filters.'; return; }
+    const header = WORKBOOK_EXPORT_COLS.map(([, label]) => toCsvField(label)).join(',');
+    const lines = rows.map(r => WORKBOOK_EXPORT_COLS.map(([key]) => toCsvField(workbookExportValue(r, key))).join(','));
+    // BOM so Excel reads it as UTF-8; CRLF line endings for the same reason.
+    const csv = String.fromCharCode(0xFEFF) + [header, ...lines].join('\r\n');
+    const filename = `utt-inventory-export-${new Date().toISOString().slice(0, 10)}.csv`;
 
     statusEl.textContent = '';
     try {
-      const filename = `utt-inventory-export-${new Date().toISOString().slice(0, 10)}.csv`;
-      await dl.save({ filename, data: csv });
-      statusEl.textContent = `Saved ${workbookCurrentRows.length.toLocaleString()} rows.`;
+      const dl = await getDownloadsCap();
+      if (dl) await dl.save({ filename, data: csv });
+      else triggerBrowserDownload(filename, csv);
+      statusEl.textContent = `Exported ${rows.length.toLocaleString()} rows to ${filename}.`;
     } catch (e) {
       if (e && e.code === 'declined') { statusEl.textContent = ''; return; }
       statusEl.textContent = 'Could not export right now — try again in a moment.';
     }
   }
-  function buildWorkbook() {
-    const priced = COMP_DATA.map(r => toNum(r.price_numeric)).filter(v => v !== null);
-    const soldCount = USED_DATA.filter(r => r.price_type === 'sold').length;
-    const states = new Set(USED_DATA.map(r => (r.state || '').trim()).filter(Boolean));
+
+  // The four tiles at the top of the Workbook describe the rows currently in the
+  // table, so they change with every filter. (They used to be drawn once from the
+  // full dataset, which left "$47,426 median price" on screen after filtering to
+  // sold-only or asking-only.)
+  function renderWorkbookStats(rows) {
+    const price = r => toNum(r.price_numeric);
+    const soldRows = rows.filter(r => r.price_type === 'sold');
+    const soldP = soldRows.map(price).filter(v => v !== null);
+    const askP = rows.filter(r => r.price_type !== 'sold').map(price).filter(v => v !== null);
+    const allP = soldP.concat(askP);
+    const states = new Set(rows.map(r => (r.state || '').trim()).filter(Boolean));
+    const narrowed = rows.length !== USED_DATA.length;
+    const pt = workbookFilters.priceType;
+    const m = a => (a.length ? fmt(percentile(a, 50)) : '&mdash;');
+
+    let medNum, medLabel, medSub = '';
+    if (pt === 'sold' || (!askP.length && soldP.length)) { medNum = m(soldP); medLabel = 'median sold price'; }
+    else if (pt === 'asking' || (!soldP.length && askP.length)) { medNum = m(askP); medLabel = 'median asking price'; }
+    else {
+      medNum = m(allP); medLabel = 'median price, all listings';
+      if (soldP.length && askP.length) medSub = `<span class="stat-sub">sold ${m(soldP)} &middot; asking ${m(askP)}</span>`;
+    }
+    const soldPct = rows.length ? Math.round(soldRows.length / rows.length * 100) : 0;
     document.getElementById('workbookStats').innerHTML = `
-      <div class="stat-tile"><div class="stat-num">${USED_DATA.length.toLocaleString()}</div><div class="stat-label">total listings</div></div>
-      <div class="stat-tile"><div class="stat-num">${fmt(percentile(priced, 50))}</div><div class="stat-label">median price</div></div>
-      <div class="stat-tile"><div class="stat-num">${soldCount.toLocaleString()}</div><div class="stat-label">verified sold</div></div>
+      <div class="stat-tile"><div class="stat-num">${rows.length.toLocaleString()}</div><div class="stat-label">${narrowed ? 'listings shown' : 'total listings'}${narrowed ? `<span class="stat-sub">of ${USED_DATA.length.toLocaleString()} total</span>` : ''}</div></div>
+      <div class="stat-tile"><div class="stat-num">${medNum}</div><div class="stat-label">${medLabel}${medSub}</div></div>
+      <div class="stat-tile"><div class="stat-num">${soldRows.length.toLocaleString()}</div><div class="stat-label">verified sold<span class="stat-sub">${soldPct}% of listings shown</span></div></div>
       <div class="stat-tile"><div class="stat-num">${states.size}</div><div class="stat-label">states/provinces</div></div>
     `;
+  }
+  function buildWorkbook() {
+    // The stat tiles are drawn by renderWorkbook (renderWorkbookStats) so they
+    // follow every filter instead of being fixed at the full-dataset figures.
 
     // Choices reflect the rows this table can actually show: every listing
     // counts here (priced or not), narrowed by the Price type filter, and the
@@ -2833,6 +2937,7 @@
     document.querySelectorAll('#workbookTable thead th').forEach(th => th.classList.toggle('sorted', th.getAttribute('data-sort') === col));
     document.getElementById('workbookCount').textContent = `${rows.length.toLocaleString()} listings`;
     workbookCurrentRows = rows;
+    renderWorkbookStats(rows);
 
     const body = rows.map(r => {
       const yearDisp = r.year ? String(r.year).replace(/\.0$/, '') : '';
