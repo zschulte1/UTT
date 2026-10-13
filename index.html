@@ -2282,9 +2282,12 @@
       const top3 = mfrSorted.slice(0, 3);
       const top3Share = Math.round(top3.reduce((s, [, rows]) => s + rows.length, 0) / filtered.length * 100);
       const names = top3.map(([m]) => m);
-      const soldNote = soldPrices.length >= 5
-        ? `median sold price sits at ${fmt(percentile(soldPrices, 50))} across ${soldPrices.length.toLocaleString()} verified sales`
-        : 'too few verified sales yet for a reliable median';
+      const askPrices = filtered.filter(r => r.price_type !== 'sold').map(r => toNum(r.price_numeric)).filter(v => v !== null);
+      const soldNote = soldPrices.length < 5
+        ? 'too few verified sales yet for a reliable median'
+        : (dashFilters.soldOnly || !askPrices.length)
+          ? `median sold price sits at ${fmt(percentile(soldPrices, 50))} across ${soldPrices.length.toLocaleString()} verified sales`
+          : `median sold price ${fmt(percentile(soldPrices, 50))} (${soldPrices.length.toLocaleString()} verified sales) &middot; median asking price ${fmt(percentile(askPrices, 50))} (${askPrices.length.toLocaleString()} listings)`;
       takeaway.innerHTML = `${names[0]}, ${names[1]}, and ${names[2]} lead chassis volume at ${top3Share}% combined` +
         `<span class="sub">${soldNote}</span>`;
     } else {
@@ -2304,11 +2307,38 @@
 
     const tileRange = `<div class="stat-tile"><div class="stat-num">${fmt(p25)}&ndash;${fmt(p75)}</div><div class="stat-label">price concentration<span class="stat-sub">middle 50% of listings</span>${caveat}</div></div>`;
 
-    const tileSold = soldPrices.length
-      ? `<div class="stat-tile"><div class="stat-num">${fmt(percentile(soldPrices, 50))}</div><div class="stat-label">median sold price<span class="stat-sub">${soldPrices.length.toLocaleString()} verified comps</span></div></div>`
-      : `<div class="stat-tile"><div class="stat-num">&mdash;</div><div class="stat-label">no verified sold comps in this slice</div></div>`;
+    // Verified-sold view: the sold median. All-listings view: the blended median
+    // of every listing, with the sold and asking medians underneath, so this tile
+    // changes with the toggle instead of repeating the sold figure.
+    const split = dashMedianSplit(filtered);
+    const tileSold = dashFilters.soldOnly || !split || split.ask === null
+      ? (soldPrices.length
+        ? `<div class="stat-tile"><div class="stat-num">${fmt(percentile(soldPrices, 50))}</div><div class="stat-label">median sold price<span class="stat-sub">${soldPrices.length.toLocaleString()} verified comps</span></div></div>`
+        : `<div class="stat-tile"><div class="stat-num">&mdash;</div><div class="stat-label">no verified sold comps in this slice</div></div>`)
+      : `<div class="stat-tile"><div class="stat-num">${fmt(split.all)}</div><div class="stat-label">median price, all listings<span class="stat-sub">${split.sold !== null ? `sold ${fmt(split.sold)} (${split.soldN.toLocaleString()})` : 'no verified sold'} &middot; asking ${fmt(split.ask)} (${split.askN.toLocaleString()})</span></div></div>`;
 
     stats.innerHTML = tileListings + tileChassis + tileRange + tileSold;
+  }
+
+  // Median wording for a group of rows that follows the "Verified sold only"
+  // toggle. With it on, every row is sold, so one sold median. With it off, the
+  // blended median of every listing leads and the sold and asking medians are
+  // spelled out beside it, so flipping the toggle can never leave a sold-only
+  // number on screen under a heading that now covers asking listings too.
+  function dashMedianSplit(rows) {
+    const sold = rows.filter(r => r.price_type === 'sold').map(r => toNum(r.price_numeric)).filter(v => v !== null);
+    const ask = rows.filter(r => r.price_type !== 'sold').map(r => toNum(r.price_numeric)).filter(v => v !== null);
+    const all = sold.concat(ask);
+    if (!all.length) return null;
+    const m = a => (a.length ? percentile(a, 50) : null);
+    return { sold: m(sold), ask: m(ask), all: m(all), soldN: sold.length, askN: ask.length };
+  }
+  function dashMedianText(rows) {
+    const s = dashMedianSplit(rows);
+    if (!s) return '';
+    if (dashFilters.soldOnly || s.ask === null) return ` &middot; median ${fmt(s.sold !== null ? s.sold : s.all)} sold`;
+    if (s.sold === null) return ` &middot; median ${fmt(s.ask)} asking`;
+    return ` &middot; median ${fmt(s.all)} (sold ${fmt(s.sold)} &middot; asking ${fmt(s.ask)})`;
   }
 
   function renderDashboardCharts() {
@@ -2341,7 +2371,7 @@
       .map(([mfr, rows]) => {
         const { prices, basis } = pricesByBasis(rows);
         return {
-          mfr, count: rows.length, share: rows.length / filtered.length * 100,
+          mfr, rows, count: rows.length, share: rows.length / filtered.length * 100,
           median: prices.length ? percentile(prices, 50) : null, basis,
         };
       })
@@ -2356,7 +2386,7 @@
         <div class="rank-row">
           <span class="rank-num">${idx + 1}</span>
           <span class="rank-label">${m.mfr}</span>
-          <span class="markup-detail" style="flex:1; text-align:left; padding-left:4px;">${m.share.toFixed(0)}% share &middot; ${m.count} listings${m.median !== null ? ` &middot; median ${fmt(m.median)}${m.basis === 'asking' ? ' asking' : ' sold'}` : ''}</span>
+          <span class="markup-detail" style="flex:1; text-align:left; padding-left:4px;">${m.share.toFixed(0)}% share &middot; ${m.count} listings${dashMedianText(m.rows)}</span>
         </div>`).join('');
     } else {
       document.getElementById('chassisShareNote').textContent = '';
@@ -2378,7 +2408,7 @@
       .map(([brand, rows]) => {
         const { prices, basis, soldCount } = pricesByBasis(rows);
         return {
-          brand, count: rows.length, soldCount, share: rows.length / totalIdentified * 100,
+          brand, rows, count: rows.length, soldCount, share: rows.length / totalIdentified * 100,
           median: prices.length ? percentile(prices, 50) : null, basis,
         };
       })
@@ -2393,7 +2423,7 @@
         <div class="rank-row">
           <span class="rank-num">${idx + 1}</span>
           <span class="rank-label">${b.brand}</span>
-          <span class="markup-detail" style="flex:1; text-align:left; padding-left:4px;">${b.share.toFixed(0)}% share &middot; ${b.count} listings${b.median !== null ? ` &middot; median ${fmt(b.median)}${b.basis === 'asking' ? ' asking' : ' sold'}` : ''}</span>
+          <span class="markup-detail" style="flex:1; text-align:left; padding-left:4px;">${b.share.toFixed(0)}% share &middot; ${b.count} listings${dashMedianText(b.rows)}</span>
         </div>`).join('');
     } else {
       document.getElementById('bodyBrandNote').textContent = 'Not enough body-brand data identified in this slice.';
