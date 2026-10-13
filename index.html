@@ -3258,6 +3258,11 @@
   function buildMapGL(pins) {
     pins.forEach((p, i) => { p._i = i; });
     mapGLPins = pins;
+    // The legend only needs the pins and the active mode, not the map engine, so
+    // refresh it right away. Waiting for the engine to finish loading left the
+    // previous mode's counts and medians on screen (Asking highlighted, sold
+    // numbers shown) for as long as the engine took to load.
+    mapGLLegend();
     mapSetEngine(true); // container must be visible (non-zero size) before MapLibre measures it
     if (!mapEnsureGL()) { mapUseGL = false; mapSetEngine(false); buildMap(); return; }
     if (mapGLReady) { mapRenderGL(); mapGLApplyFocus(); }
